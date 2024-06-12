@@ -1,7 +1,8 @@
 import fitz  # PyMuPDF
 import os
 import logging
-from flask import Flask, request, send_from_directory, jsonify
+import zipstream
+from flask import Flask, request, send_from_directory, jsonify, Response
 from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
@@ -38,38 +39,51 @@ def replace_date_in_pdf(file_path, old_dates, new_date):
 @app.route('/', methods=['GET', 'POST'])
 def upload_file():
     if request.method == 'POST':
-        if 'file' not in request.files:
+        if 'files' not in request.files:
             return jsonify(error='No file part'), 400
-        file = request.files['file']
-        if file.filename == '':
-            return jsonify(error='No selected file'), 400
-        if file and allowed_file(file.filename):
-            filename = secure_filename(file.filename)
-            file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-            file.save(file_path)
-            logging.info(f'File uploaded to: {file_path}')
+        files = request.files.getlist('files')
+        if not files or files[0].filename == '':
+            return jsonify(error='No selected files'), 400
+        
+        old_dates_str = request.form['old_dates']
+        new_date = request.form['new_date']
 
-            old_dates_str = request.form['old_dates']
-            new_date = request.form['new_date']
+        # Garantir que a entrada de datas antigas seja sempre tratada como uma lista
+        old_dates = [date.strip() for date in old_dates_str.split(',') if date.strip()]
 
-            # Garantir que a entrada de datas antigas seja sempre tratada como uma lista
-            old_dates = [date.strip() for date in old_dates_str.split(',') if date.strip()]
+        if not old_dates or not new_date:
+            return jsonify(error='Invalid date input'), 400
 
-            if not old_dates or not new_date:
-                return jsonify(error='Invalid date input'), 400
+        processed_files = []
+        for file in files:
+            if file and allowed_file(file.filename):
+                filename = secure_filename(file.filename)
+                file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+                file.save(file_path)
+                logging.info(f'File uploaded to: {file_path}')
 
-            try:
-                processed_file_path = replace_date_in_pdf(file_path, old_dates, new_date)
-                return send_from_directory(app.config['PROCESSED_FOLDER'], os.path.basename(processed_file_path), as_attachment=True)
-            except Exception as e:
-                logging.error(f'Error in processing: {e}')
-                return jsonify(error='Internal Server Error'), 500
+                try:
+                    processed_file_path = replace_date_in_pdf(file_path, old_dates, new_date)
+                    processed_files.append(processed_file_path)
+                except Exception as e:
+                    logging.error(f'Error in processing: {e}')
+                    return jsonify(error='Internal Server Error'), 500
+
+        # Create a zip file with all processed PDFs
+        z = zipstream.ZipFile(mode='w', compression=zipstream.ZIP_DEFLATED)
+        for file_path in processed_files:
+            z.write(file_path, os.path.basename(file_path))
+
+        response = Response(z, mimetype='application/zip')
+        response.headers['Content-Disposition'] = 'attachment; filename=processed_files.zip'
+        return response
+
     return '''
     <!doctype html>
     <title>Replace Dates in PDF</title>
-    <h1>Upload PDF File</h1>
+    <h1>Upload PDF Files</h1>
     <form method=post enctype=multipart/form-data>
-      <input type=file name=file>
+      <input type=file name=files multiple>
       <input type=text name=old_dates placeholder="Old dates, e.g., 23/11/2023,26/11/2023">
       <input type=text name=new_date placeholder="New date, e.g., 10/06/2024">
       <input type=submit value=Upload>
