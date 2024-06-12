@@ -1,6 +1,6 @@
 import fitz  # PyMuPDF
 import os
-from flask import Flask, request, render_template, send_from_directory
+from flask import Flask, request, send_from_directory
 from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
